@@ -1,0 +1,78 @@
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class WinAPI {
+    [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+    [DllImport("user32.dll")] public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
+    [DllImport("user32.dll")] public static extern int GetKeyState(int vKey);
+}
+"@
+
+$MOUSEEVENTF_LEFTDOWN = 0x02
+$MOUSEEVENTF_LEFTUP = 0x04
+$VK_RBUTTON = 0x02
+$VK_CAPITAL = 0x14  # Caps Lock Taste
+
+function Get-CrosshairColor {
+    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $centerX = [int]($bounds.Width / 2)
+    $centerY = [int]($bounds.Height / 2)
+
+    $bmp = New-Object Drawing.Bitmap 1,1
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($centerX, $centerY, 0, 0, $bmp.Size)
+    $color = $bmp.GetPixel(0,0)
+    $g.Dispose()
+    $bmp.Dispose()
+
+    return $color
+}
+
+function LeftClick {
+    [WinAPI]::mouse_event($MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    Start-Sleep -Milliseconds 10
+    [WinAPI]::mouse_event($MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+}
+
+function IsCapsLockActive {
+    $state = [WinAPI]::GetKeyState($VK_CAPITAL)
+    return ($state -band 0x0001) -ne 0
+}
+
+$lastCapsState = IsCapsLockActive
+$lastClickTime = Get-Date
+
+Write-Host "🎯 Triggerbot (Fadenkreuz-Fokus) geladen – CAPS LOCK = AN/AUS, Rechtsklick = Aktiv" -ForegroundColor Cyan
+Write-Host "💡 Die Caps Lock-LED zeigt den Status an: AN = leuchtet, AUS = aus" -ForegroundColor Green
+
+while ($true) {
+    # Umschalten mit Caps Lock erkennen (Flanken erkennen)
+    $currentCapsState = IsCapsLockActive
+    if ($currentCapsState -ne $lastCapsState) {
+        if ($currentCapsState) {
+            Write-Host "[$((Get-Date).ToLongTimeString())] Triggerbot: AN (Caps Lock leuchtet 💡)" -ForegroundColor Yellow
+        } else {
+            Write-Host "[$((Get-Date).ToLongTimeString())] Triggerbot: AUS (Caps Lock aus)" -ForegroundColor DarkYellow
+        }
+        $lastCapsState = $currentCapsState
+    }
+
+    # Triggerbedingung: Aktiv (Caps Lock an) + Rechte Maustaste gedrückt
+    if ($currentCapsState -and ([WinAPI]::GetAsyncKeyState($VK_RBUTTON) -lt 0)) {
+        $color = Get-CrosshairColor
+
+        # Farbprüfung: typisches rot (Fadenkreuz trifft Ziel)
+        if ($color.R -gt 150 -and $color.G -lt 80 -and $color.B -lt 80) {
+            $now = Get-Date
+            if (($now - $lastClickTime).TotalMilliseconds -gt 100) {
+                LeftClick
+                $lastClickTime = $now
+            }
+        }
+    }
+
+    Start-Sleep -Milliseconds 1
+}
