@@ -1,0 +1,94 @@
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class WinAPI {
+    [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+    [DllImport("user32.dll")] public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
+    [DllImport("user32.dll")] public static extern int GetKeyState(int vKey);
+}
+"@
+
+$MOUSEEVENTF_LEFTDOWN = 0x02
+$MOUSEEVENTF_LEFTUP = 0x04
+$VK_RBUTTON = 0x02
+$VK_CAPITAL = 0x14
+
+# Erweiterte Farberkennung für FiveM
+function Test-TargetColor($color) {
+    # FiveM-Zielmarker sind oft dunkleres Rot, nicht reines Rot
+    # Toleranzbereich deutlich erweitert
+    $isRed = ($color.R -gt 100) -and ($color.G -lt 120) -and ($color.B -lt 120)
+    $isRedDominant = ($color.R -gt $color.G * 1.3) -and ($color.R -gt $color.B * 1.3)
+    return ($isRed -and $isRedDominant)
+}
+
+function Get-CrosshairColor {
+    $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $centerX = [int]($bounds.Width / 2)
+    $centerY = [int]($bounds.Height / 2)
+
+    # Mehrere Pixel abtasten für bessere Trefferquote
+    $bmp = New-Object Drawing.Bitmap 3, 3
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($centerX - 1, $centerY - 1, 0, 0, $bmp.Size)
+    
+    $found = $false
+    for ($x = 0; $x -lt 3; $x++) {
+        for ($y = 0; $y -lt 3; $y++) {
+            if (Test-TargetColor $bmp.GetPixel($x, $y)) {
+                $found = $true
+                break
+            }
+        }
+        if ($found) { break }
+    }
+    
+    $g.Dispose()
+    $bmp.Dispose()
+    return $found
+}
+
+function LeftClick {
+    [WinAPI]::mouse_event($MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    Start-Sleep -Milliseconds 5
+    [WinAPI]::mouse_event($MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+}
+
+function IsCapsLockActive {
+    $state = [WinAPI]::GetKeyState($VK_CAPITAL)
+    return ($state -band 0x0001) -ne 0
+}
+
+$lastCapsState = IsCapsLockActive
+$lastClickTime = Get-Date
+
+Write-Host "Triggerbot geladen - CAPS LOCK = AN/AUS, Rechtsklick = Aktiv" -ForegroundColor Cyan
+
+while ($true) {
+    $currentCapsState = IsCapsLockActive
+    if ($currentCapsState -ne $lastCapsState) {
+        if ($currentCapsState) {
+            Write-Host "[$((Get-Date).ToLongTimeString())] Triggerbot: AN" -ForegroundColor Yellow
+        } else {
+            Write-Host "[$((Get-Date).ToLongTimeString())] Triggerbot: AUS" -ForegroundColor DarkYellow
+        }
+        $lastCapsState = $currentCapsState
+    }
+
+    if ($currentCapsState -and ([WinAPI]::GetAsyncKeyState($VK_RBUTTON) -lt 0)) {
+        if (Get-CrosshairColor) {
+            $now = Get-Date
+            # Cooldown reduziert für schnellere Reaktion
+            if (($now - $lastClickTime).TotalMilliseconds -gt 60) {
+                LeftClick
+                $lastClickTime = $now
+            }
+        }
+    }
+
+    # Sleep auf 0 reduziert oder ganz entfernen für maximale Reaktionsgeschwindigkeit
+    # Start-Sleep -Milliseconds 1
+}
